@@ -1,0 +1,37 @@
+[app]
+name = "dictado"
+version = "0.1.0"
+debug = false
+
+[logging]
+level = "INFO"
+file = "logs/dictado.log"
+
+[runtime]
+ffmpeg_bin = "C:/ffmpeg/bin"
+
+[hotkey]
+combo = "ctrl+win"
+mode = "hold"
+
+[audio]
+sample_rate = 16000
+channels = 1
+device = ""
+blocksize = 0
+
+[stt]
+provider = "faster-whisper"
+model = "large-v3-turbo"
+device = "cuda"
+compute_type = "float16"
+local_files_only = true
+warmup_on_startup = true
+
+[injection]
+method = "sendinput"
+fallback_to_clipboard = true
+
+[overlay]
+enabled = true
+position = "bottom-center"
