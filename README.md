@@ -1,8 +1,19 @@
 # dictado
 
-Aplicación de dictado por voz para Windows, local-first, pensada para escribir en cualquier campo de texto con una hotkey global.
+Si solo quieres probar la aplicación:
 
-La forma recomendada de probarla no es clonar el repo ni instalar Python: es descargar el instalador de Windows y ejecutarlo.
+1. Entra en [Releases](https://github.com/juanfranbrv/dictado/releases)
+2. Descarga `dictado-setup.exe`
+3. Ejecuta el instalador
+4. Usa la hotkey `Ctrl + Win`
+
+No necesitas:
+
+- clonar el repositorio
+- instalar Python
+- montar un entorno de desarrollo
+
+`dictado` es una aplicación de dictado por voz para Windows, local-first, pensada para escribir en cualquier campo de texto con una hotkey global.
 
 El flujo es simple:
 
