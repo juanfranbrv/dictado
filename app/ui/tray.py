@@ -12,6 +12,7 @@ class TrayController(QObject):
     pause_toggled = pyqtSignal(bool)
     open_config_requested = pyqtSignal()
     exit_requested = pyqtSignal()
+    profile_selected = pyqtSignal(str)
 
     def __init__(self, icon_path: Path) -> None:
         super().__init__()
@@ -22,6 +23,9 @@ class TrayController(QObject):
         self._pause_action.setCheckable(True)
         self._pause_action.toggled.connect(self.pause_toggled.emit)
 
+        self._profiles_menu = QMenu("Perfil", self._menu)
+        self._profile_actions: dict[str, QAction] = {}
+
         self._config_action = QAction("Configuracion", self._menu)
         self._config_action.triggered.connect(self.open_config_requested.emit)
 
@@ -29,6 +33,7 @@ class TrayController(QObject):
         self._exit_action.triggered.connect(self.exit_requested.emit)
 
         self._menu.addAction(self._pause_action)
+        self._menu.addMenu(self._profiles_menu)
         self._menu.addSeparator()
         self._menu.addAction(self._config_action)
         self._menu.addSeparator()
@@ -36,6 +41,7 @@ class TrayController(QObject):
 
         self._tray.setContextMenu(self._menu)
         self._tray.setToolTip("dictado")
+        self._tray.activated.connect(self._handle_activated)
 
     def show(self) -> None:
         self._tray.show()
@@ -48,6 +54,27 @@ class TrayController(QObject):
         self._pause_action.setChecked(paused)
         self._pause_action.blockSignals(False)
         self._tray.setToolTip("dictado (pausado)" if paused else "dictado")
+
+    def set_profiles(self, profiles: list[str], active_profile: str) -> None:
+        self._profiles_menu.clear()
+        self._profile_actions.clear()
+        for profile in profiles:
+            action = QAction(profile, self._profiles_menu)
+            action.setCheckable(True)
+            action.setChecked(profile == active_profile)
+            action.triggered.connect(lambda checked, profile_name=profile: self.profile_selected.emit(profile_name))
+            self._profiles_menu.addAction(action)
+            self._profile_actions[profile] = action
+
+    def set_active_profile(self, profile: str) -> None:
+        for name, action in self._profile_actions.items():
+            action.blockSignals(True)
+            action.setChecked(name == profile)
+            action.blockSignals(False)
+
+    def _handle_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            self.open_config_requested.emit()
 
     def _load_icon(self, icon_path: Path) -> QIcon:
         if icon_path.exists():

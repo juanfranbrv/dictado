@@ -8,17 +8,26 @@ from loguru import logger
 
 from app.models import Segment, Transcript
 from app.providers.stt.registry import register_stt
+from app.utils.whisper_models import whisper_model_load_target
 
 
 @register_stt("faster-whisper")
 class FasterWhisperSTT:
     name = "faster-whisper"
 
-    def __init__(self, model: str, device: str, compute_type: str, local_files_only: bool = True) -> None:
+    def __init__(
+        self,
+        model: str,
+        device: str,
+        compute_type: str,
+        local_files_only: bool = True,
+        beam_size: int = 5,
+    ) -> None:
         self._model_name = model
         self._requested_device = device
         self._requested_compute_type = compute_type
         self._local_files_only = local_files_only
+        self._beam_size = beam_size
         self._active_device = device
         self._active_compute_type = compute_type
         self._model: WhisperModel | None = None
@@ -49,7 +58,7 @@ class FasterWhisperSTT:
             audio,
             language=language,
             initial_prompt=initial_prompt,
-            beam_size=5,
+            beam_size=self._beam_size,
             condition_on_previous_text=False,
         )
 
@@ -83,18 +92,20 @@ class FasterWhisperSTT:
         if self._model is not None:
             return self._model
 
+        model_target = whisper_model_load_target(self._model_name)
         try:
             self._active_device = self._requested_device
             self._active_compute_type = self._requested_compute_type
             self._model = WhisperModel(
-                self._model_name,
+                model_target,
                 device=self._active_device,
                 compute_type=self._active_compute_type,
                 local_files_only=self._local_files_only,
             )
             logger.info(
-                "Loaded STT model {} on {} ({}) local_only={}",
+                "Loaded STT model {} from {} on {} ({}) local_only={}",
                 self._model_name,
+                model_target,
                 self._active_device,
                 self._active_compute_type,
                 self._local_files_only,
@@ -111,14 +122,15 @@ class FasterWhisperSTT:
             self._active_device = "cpu"
             self._active_compute_type = "int8"
             self._model = WhisperModel(
-                self._model_name,
+                model_target,
                 device=self._active_device,
                 compute_type=self._active_compute_type,
                 local_files_only=self._local_files_only,
             )
             logger.info(
-                "Loaded STT model {} on {} ({}) local_only={}",
+                "Loaded STT model {} from {} on {} ({}) local_only={}",
                 self._model_name,
+                model_target,
                 self._active_device,
                 self._active_compute_type,
                 self._local_files_only,

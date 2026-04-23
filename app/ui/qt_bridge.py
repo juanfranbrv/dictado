@@ -7,3 +7,4 @@ class QtEventBridge(QObject):
     recording_started = pyqtSignal()
     transcript_ready = pyqtSignal()
     pause_changed = pyqtSignal(bool)
+    language_changed = pyqtSignal(str)

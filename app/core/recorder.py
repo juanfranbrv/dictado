@@ -10,6 +10,7 @@ from loguru import logger
 
 from app.config import AudioSettings
 from app.events import EventBus
+from app.utils.audio_devices import input_device_candidates
 
 
 class AudioRecorder:
@@ -37,10 +38,17 @@ class AudioRecorder:
             self._is_recording = False
             self._frames.clear()
 
+    def update_settings(self, settings: AudioSettings) -> None:
+        with self._lock:
+            self._settings = settings
+
     def _handle_start(self, _: dict[str, Any]) -> None:
         with self._lock:
             if not self._is_recording:
-                self._start_locked()
+                try:
+                    self._start_locked()
+                except Exception as exc:
+                    logger.error("Unable to start audio recording: {}", exc)
 
     def _handle_stop(self, _: dict[str, Any]) -> None:
         with self._lock:
@@ -50,20 +58,41 @@ class AudioRecorder:
     def _start_locked(self) -> None:
         logger.info("Starting audio recording")
         self._frames = []
-        self._stream = sd.InputStream(
-            samplerate=self._settings.sample_rate,
-            channels=self._settings.channels,
-            dtype="float32",
-            blocksize=self._settings.blocksize,
-            callback=self._audio_callback,
-            device=self._settings.device or None,
-        )
-        self._stream.start()
+        resolved_device = None
+        resolved_reason = "system default"
+        last_error: Exception | None = None
+        for reason, candidate in input_device_candidates(self._settings.device):
+            try:
+                logger.info("Opening audio input via {}", reason)
+                stream = sd.InputStream(
+                    samplerate=self._settings.sample_rate,
+                    channels=self._settings.channels,
+                    dtype="float32",
+                    blocksize=self._settings.blocksize,
+                    callback=self._audio_callback,
+                    device=candidate,
+                )
+                stream.start()
+                self._stream = stream
+                resolved_device = candidate
+                resolved_reason = reason
+                break
+            except Exception as exc:
+                last_error = exc
+                logger.warning("Unable to open audio input via {}: {}", reason, exc)
+
+        if self._stream is None:
+            raise RuntimeError("No usable audio input device was available") from last_error
+
         self._is_recording = True
         self._started_at = perf_counter()
         self._event_bus.publish(
             "RECORDING_STARTED",
-            {"sample_rate": self._settings.sample_rate},
+            {
+                "sample_rate": self._settings.sample_rate,
+                "device": resolved_reason,
+                "device_id": resolved_device if resolved_device is not None else "default",
+            },
         )
 
     def _stop_locked(self) -> None:

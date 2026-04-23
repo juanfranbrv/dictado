@@ -5,19 +5,22 @@ from pathlib import Path
 
 from loguru import logger
 
-from app.config import LoggingSettings, ROOT_DIR
+from app.config import LoggingSettings
+from app.utils.paths import logs_dir
 
 
 def setup_logging(settings: LoggingSettings) -> None:
-    log_path = ROOT_DIR / settings.file
+    log_path = logs_dir() / Path(settings.file).name
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
     logger.remove()
-    logger.add(
-        sys.stderr,
-        level=settings.level.upper(),
-        format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
-    )
+    console_sink = sys.stderr or sys.stdout
+    if console_sink is not None:
+        logger.add(
+            console_sink,
+            level=settings.level.upper(),
+            format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
+        )
     logger.add(
         log_path,
         level=settings.level.upper(),

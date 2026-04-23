@@ -2,6 +2,7 @@
 name = "dictado"
 version = "0.1.0"
 debug = false
+active_profile = "default"
 
 [logging]
 level = "INFO"
@@ -13,6 +14,10 @@ ffmpeg_bin = "C:/ffmpeg/bin"
 [hotkey]
 combo = "ctrl+win"
 mode = "hold"
+force_language_es = "ctrl+win+s"
+force_language_en = "ctrl+win+e"
+apply_polish = "ctrl+win+enter"
+discard_polish = "ctrl+win+backspace"
 
 [audio]
 sample_rate = 16000
@@ -35,3 +40,50 @@ fallback_to_clipboard = true
 [overlay]
 enabled = true
 position = "bottom-center"
+show_language = true
+
+[language]
+preferred = ["es", "en"]
+default = "es"
+confidence_threshold = 0.75
+switch_penalty = 0.15
+
+[profiles.default]
+stt_provider = "faster-whisper"
+llm_provider = "groq"
+llm_fallback_provider = "gemini"
+polish_enabled = true
+style = "default"
+
+[profiles.default.stt_config]
+model = "large-v3-turbo"
+device = "cuda"
+compute_type = "float16"
+local_files_only = true
+warmup_on_startup = true
+beam_size = 5
+
+[profiles.default.llm_config]
+api_key = ""
+model = "llama-3.1-8b-instant"
+timeout = 6.0
+
+[profiles.default.llm_fallback_config]
+api_key = ""
+model = "gemini-3.1-flash-lite-preview"
+enabled = true
+timeout = 10.0
+
+[profiles.fast]
+stt_provider = "faster-whisper"
+llm_provider = ""
+polish_enabled = false
+style = "default"
+
+[profiles.fast.stt_config]
+model = "large-v3-turbo"
+device = "cuda"
+compute_type = "float16"
+local_files_only = true
+warmup_on_startup = true
+beam_size = 1

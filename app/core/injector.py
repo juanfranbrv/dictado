@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import time
 from ctypes import wintypes
+from time import perf_counter
 from typing import Any
 
 import win32clipboard
@@ -57,7 +58,10 @@ class TextInjector:
         self._send_input.restype = wintypes.UINT
 
     def attach(self) -> None:
-        self._event_bus.subscribe("TRANSCRIPT_READY", self._handle_transcript_ready)
+        self._event_bus.subscribe("INJECT_TEXT", self._handle_inject_text)
+
+    def update_settings(self, settings: InjectionSettings) -> None:
+        self._settings = settings
 
     def inject_text(self, text: str) -> None:
         if not text:
@@ -75,9 +79,20 @@ class TextInjector:
             logger.warning("SendInput injection failed ({}). Falling back to clipboard.", exc)
             self._inject_via_clipboard(text)
 
-    def _handle_transcript_ready(self, payload: dict[str, Any]) -> None:
-        transcript = payload["transcript"]
-        self.inject_text(transcript.text)
+    def _handle_inject_text(self, payload: dict[str, Any]) -> None:
+        started = perf_counter()
+        self.inject_text(payload["text"])
+        self._event_bus.publish(
+            "TIMING",
+            {
+                "session_id": int(payload.get("session_id", 0)),
+                "stage": "inject",
+                "seconds": perf_counter() - started,
+                "profile": payload.get("profile", ""),
+                "source": payload.get("source", ""),
+            },
+        )
+        self._event_bus.publish("TEXT_INJECTED", payload)
 
     def _inject_via_sendinput(self, text: str) -> None:
         logger.info("Injecting text via SendInput ({} chars)", len(text))
