@@ -270,6 +270,16 @@ Las decisiones reales que se han ido tomando durante la implementación están e
 - la experiencia de primer arranque todavía necesita más pruebas en máquinas ajenas
 - la calidad final depende mucho del micrófono y del perfil elegido
 
+## Reconocimientos
+
+Este proyecto no existiría igual sin el trabajo previo de mucha gente.
+
+Gracias especialmente a:
+
+- OpenAI, por el impacto enorme de Whisper y por haber empujado el ecosistema de STT con modelos abiertos que han permitido que muchos proyectos personales y pequeños puedan existir.
+- los autores y mantenedores de `faster-whisper` y `CTranslate2`, por hacer viable un uso local y práctico de Whisper en máquinas reales.
+- [WhisperFlow](https://whisperflow.ai/), porque fue una referencia clara de producto y una de las cosas que me animaron a construir mi propia herramienta.
+
 ## Licencia
 
 Pendiente de definir.
