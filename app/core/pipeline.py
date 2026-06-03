@@ -19,6 +19,8 @@ from app.providers.stt import __all__ as _stt_import_guard  # noqa: F401
 from app.providers.stt.base import STTProvider
 from app.providers.stt.registry import create_stt
 
+_REMOTE_LLM_PROVIDERS_REQUIRING_API_KEY = {"fireworks", "google", "gemini", "groq"}
+
 
 class Pipeline:
     """Handle audio -> STT -> transcript events."""
@@ -28,8 +30,11 @@ class Pipeline:
     _SHORT_SILENCE_WINDOW_SECONDS = 0.45
     _SILENCE_RMS_THRESHOLD = 0.0015
     _SILENCE_PEAK_THRESHOLD = 0.008
+    _QUIET_RMS_THRESHOLD = 0.0025
+    _QUIET_PEAK_THRESHOLD = 0.015
     _HARD_SILENCE_RMS_THRESHOLD = 0.00005
     _HARD_SILENCE_PEAK_THRESHOLD = 0.0005
+    _TRAILING_SILENCE_SECONDS = 0.45
 
     def __init__(
         self,
@@ -46,9 +51,9 @@ class Pipeline:
         self._active_profile_name = active_profile
         self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="pipeline")
         self._profile = self._profiles[self._active_profile_name]
+        self._llm_status = "not-configured"
         self._provider = self._create_provider(self._profile)
-        self._llm_provider = self._create_llm_provider(self._profile)
-        self._llm_fallback_provider = self._create_llm_fallback_provider(self._profile)
+        self._llm_chain = self._create_llm_chain(self._profile)
         self._warmup_submitted = False
         self._session_seq = 0
 
@@ -60,10 +65,8 @@ class Pipeline:
 
     def shutdown(self) -> None:
         self._provider.unload()
-        if self._llm_provider is not None:
-            self._llm_provider.unload()
-        if self._llm_fallback_provider is not None:
-            self._llm_fallback_provider.unload()
+        for _, _, provider in self._llm_chain:
+            provider.unload()
         self._executor.shutdown(wait=False, cancel_futures=False)
 
     def warmup_async(self) -> None:
@@ -72,12 +75,9 @@ class Pipeline:
         self._warmup_submitted = True
         logger.info("Scheduling STT warmup in background")
         self._executor.submit(self._warmup)
-        if self._llm_provider is not None:
+        if self._llm_chain:
             logger.info("Scheduling LLM warmup in background")
             self._executor.submit(self._warmup_llm)
-        if self._llm_fallback_provider is not None:
-            logger.info("Scheduling fallback LLM warmup in background")
-            self._executor.submit(self._warmup_fallback_llm)
 
     def switch_profile(self, profile_name: str) -> None:
         if profile_name == self._active_profile_name:
@@ -87,17 +87,15 @@ class Pipeline:
 
         logger.info("Switching profile from {} to {}", self._active_profile_name, profile_name)
         self._provider.unload()
-        if self._llm_provider is not None:
-            self._llm_provider.unload()
-        if self._llm_fallback_provider is not None:
-            self._llm_fallback_provider.unload()
+        for _, _, provider in self._llm_chain:
+            provider.unload()
         self._active_profile_name = profile_name
         self._profile = self._profiles[profile_name]
         self._provider = self._create_provider(self._profile)
-        self._llm_provider = self._create_llm_provider(self._profile)
-        self._llm_fallback_provider = self._create_llm_fallback_provider(self._profile)
+        self._llm_chain = self._create_llm_chain(self._profile)
         self._warmup_submitted = False
         self.warmup_async()
+        self._publish_llm_status()
         self._event_bus.publish("PROFILE_CHANGED", {"profile": profile_name})
 
     def list_profiles(self) -> list[str]:
@@ -120,16 +118,18 @@ class Pipeline:
 
         logger.info("Reconfiguring active profile {}", active_profile)
         self._provider.unload()
-        if self._llm_provider is not None:
-            self._llm_provider.unload()
-        if self._llm_fallback_provider is not None:
-            self._llm_fallback_provider.unload()
+        for _, _, provider in self._llm_chain:
+            provider.unload()
         self._profile = profiles[active_profile]
         self._provider = self._create_provider(self._profile)
-        self._llm_provider = self._create_llm_provider(self._profile)
-        self._llm_fallback_provider = self._create_llm_fallback_provider(self._profile)
+        self._llm_chain = self._create_llm_chain(self._profile)
         self._warmup_submitted = False
         self.warmup_async()
+        self._publish_llm_status()
+
+    @property
+    def llm_status(self) -> str:
+        return self._llm_status
 
     def _create_provider(self, profile: Profile) -> STTProvider:
         stt_config = dict(profile.stt_config)
@@ -151,30 +151,33 @@ class Pipeline:
         )
         return provider
 
-    def _create_llm_provider(self, profile: Profile) -> LLMProvider | None:
+    def _create_llm_chain(self, profile: Profile) -> list[tuple[str, str, LLMProvider]]:
         llm_profile = self._llm_profile_for(profile)
-        if not profile.polish_enabled or not llm_profile.llm_provider:
-            return None
+        if not profile.polish_enabled:
+            self._llm_status = "not-configured"
+            return []
 
-        llm_config = dict(llm_profile.llm_config or {})
-        llm_config.pop("enabled", None)
-        provider = create_llm(llm_profile.llm_provider, **llm_config)
-        logger.info("Initialized LLM provider {} for profile {}", llm_profile.llm_provider, profile.name)
-        return provider
+        chain: list[tuple[str, str, LLMProvider]] = []
+        for item in _llm_chain_for(llm_profile):
+            provider_name = str(item.get("provider", "")).strip()
+            if not provider_name or item.get("enabled") is False:
+                continue
+            llm_config = dict(item)
+            llm_config.pop("provider", None)
+            llm_config.pop("enabled", None)
+            if _missing_required_llm_config(provider_name, llm_config):
+                logger.warning("Skipping LLM provider {} for profile {} because api_key is not configured", provider_name, profile.name)
+                continue
+            model_name = str(llm_config.get("model", "")).strip()
+            provider = create_llm(provider_name, **llm_config)
+            chain.append((provider_name, model_name, provider))
+            logger.info("Initialized LLM provider {} model {} for profile {}", provider_name, model_name or "default", profile.name)
 
-    def _create_llm_fallback_provider(self, profile: Profile) -> LLMProvider | None:
-        llm_profile = self._llm_profile_for(profile)
-        if not profile.polish_enabled or not llm_profile.llm_fallback_provider:
-            return None
-
-        llm_config = dict(llm_profile.llm_fallback_config or {})
-        llm_config.pop("enabled", None)
-        provider = create_llm(llm_profile.llm_fallback_provider, **llm_config)
-        logger.info("Initialized fallback LLM provider {} for profile {}", llm_profile.llm_fallback_provider, profile.name)
-        return provider
+        self._llm_status = "configured" if chain else "not-configured"
+        return chain
 
     def _llm_profile_for(self, profile: Profile) -> Profile:
-        if profile.llm_provider or profile.llm_fallback_provider:
+        if profile.llm_chain or profile.llm_provider or profile.llm_fallback_provider:
             return profile
         default_profile = self._profiles.get("default")
         if default_profile is not None:
@@ -207,12 +210,13 @@ class Pipeline:
             and rms < self._SILENCE_RMS_THRESHOLD
             and peak < self._SILENCE_PEAK_THRESHOLD
         )
+        is_quiet = rms < self._QUIET_RMS_THRESHOLD and peak < self._QUIET_PEAK_THRESHOLD
         is_effectively_zero = (
             rms < self._HARD_SILENCE_RMS_THRESHOLD
             and peak < self._HARD_SILENCE_PEAK_THRESHOLD
         )
 
-        if is_short_and_quiet or is_effectively_zero:
+        if is_short_and_quiet or is_quiet or is_effectively_zero:
             logger.info(
                 "Ignoring near-silent recording: duration={:.3f}s rms={:.5f} peak={:.5f}",
                 duration,
@@ -221,11 +225,14 @@ class Pipeline:
             )
             return
 
-        logger.info("Queueing transcription for {:.2f}s of audio", duration)
+        audio = _append_trailing_silence(audio, sample_rate, self._TRAILING_SILENCE_SECONDS)
+        padded_duration = duration + self._TRAILING_SILENCE_SECONDS
+
+        logger.info("Queueing transcription for {:.2f}s of audio", padded_duration)
         self._session_seq += 1
         session_id = self._session_seq
-        self._event_bus.publish("TIMING", {"session_id": session_id, "stage": "record", "seconds": duration})
-        self._executor.submit(self._transcribe_and_publish, audio, duration, session_id)
+        self._event_bus.publish("TIMING", {"session_id": session_id, "stage": "record", "seconds": padded_duration})
+        self._executor.submit(self._transcribe_and_publish, audio, padded_duration, session_id)
 
     def _warmup(self) -> None:
         try:
@@ -234,20 +241,37 @@ class Pipeline:
             logger.warning("STT warmup failed: {}", exc)
 
     def _warmup_llm(self) -> None:
-        if self._llm_provider is None:
-            return
-        try:
-            self._llm_provider.warmup()
-        except Exception as exc:
-            logger.warning("LLM warmup failed: {}", exc)
-
-    def _warmup_fallback_llm(self) -> None:
-        if self._llm_fallback_provider is None:
-            return
-        try:
-            self._llm_fallback_provider.warmup()
-        except Exception as exc:
-            logger.warning("Fallback LLM warmup failed: {}", exc)
+        for provider_name, model_name, provider in self._llm_chain:
+            started = perf_counter()
+            try:
+                provider.warmup()
+                duration = perf_counter() - started
+                logger.info(
+                    "[llm] warmup provider={} model={} status=ok duration={:.2f}s",
+                    provider_name,
+                    model_name or "default",
+                    duration,
+                )
+                self._publish_llm_debug(
+                    "warmup",
+                    provider_name,
+                    model_name,
+                    "ok",
+                    duration,
+                )
+                return
+            except Exception as exc:
+                duration = perf_counter() - started
+                logger.warning(
+                    "[llm] warmup provider={} model={} status=failed duration={:.2f}s error={}",
+                    provider_name,
+                    model_name or "default",
+                    duration,
+                    exc,
+                )
+                self._publish_llm_debug("warmup", provider_name, model_name, "failed", duration, str(exc))
+        self._llm_status = "unavailable"
+        self._publish_llm_status()
 
     def _transcribe_and_publish(self, audio, duration: float, session_id: int) -> None:
         try:
@@ -301,35 +325,57 @@ class Pipeline:
             "app_name": "unknown",
         }
         polished: str | None = None
-        primary_failed = False
         started = perf_counter()
 
-        if self._llm_provider is not None:
+        for provider_name, model_name, provider in self._llm_chain:
+            attempt_started = perf_counter()
             try:
-                polished = self._llm_provider.polish(transcript.text, language, context)
+                polished = provider.polish(transcript.text, language, context)
+                attempt_seconds = perf_counter() - attempt_started
+                logger.info(
+                    "[llm] session={} provider={} model={} status=ok duration={:.2f}s",
+                    session_id,
+                    provider_name,
+                    model_name or "default",
+                    attempt_seconds,
+                )
+                self._publish_llm_debug(session_id, provider_name, model_name, "ok", attempt_seconds)
+                if polished and polished.strip() and polished.strip() != transcript.text.strip():
+                    self._event_bus.publish(
+                        "TIMING",
+                        {"session_id": session_id, "stage": "polish", "seconds": perf_counter() - started},
+                    )
+                    self._publish_injection(
+                        polished,
+                        source=f"polished:{provider_name}:{model_name or 'default'}",
+                        session_id=session_id,
+                        transcript=transcript,
+                        polished=polished,
+                        audio_duration=audio_duration,
+                    )
+                    return True
             except Exception as exc:
-                primary_failed = True
-                logger.warning("Primary polish generation failed: {}", exc)
-
-        if primary_failed and self._llm_fallback_provider is not None:
-            try:
-                polished = self._llm_fallback_provider.polish(transcript.text, language, context)
-            except Exception as exc:
-                logger.warning("Fallback polish generation failed: {}", exc)
-                return False
+                attempt_seconds = perf_counter() - attempt_started
+                logger.warning(
+                    "[llm] session={} provider={} model={} status=failed duration={:.2f}s error={}",
+                    session_id,
+                    provider_name,
+                    model_name or "default",
+                    attempt_seconds,
+                    exc,
+                )
+                self._publish_llm_debug(session_id, provider_name, model_name, "failed", attempt_seconds, str(exc))
 
         self._event_bus.publish("TIMING", {"session_id": session_id, "stage": "polish", "seconds": perf_counter() - started})
-
-        if polished and polished.strip() and polished.strip() != transcript.text.strip():
-            self._publish_injection(
-                polished,
-                source="polished",
-                session_id=session_id,
-                transcript=transcript,
-                polished=polished,
-                audio_duration=audio_duration,
-            )
-            return True
+        if self._llm_chain:
+            self._llm_status = "unavailable"
+            self._publish_llm_status()
+            duration = perf_counter() - started
+            logger.warning("[llm] session={} status=none duration={:.2f}s", session_id, duration)
+            self._publish_llm_debug(session_id, "-", "-", "none", duration)
+        else:
+            logger.warning("[llm] session={} status=not-configured duration=0.00s", session_id)
+            self._publish_llm_debug(session_id, "-", "-", "not-configured", 0.0)
         return False
 
     def _publish_injection(
@@ -356,3 +402,59 @@ class Pipeline:
                 "audio_duration": audio_duration,
             },
         )
+
+    def _publish_llm_status(self) -> None:
+        self._event_bus.publish("LLM_STATUS_CHANGED", {"status": self._llm_status})
+
+    def _publish_llm_debug(
+        self,
+        session_id: int | str,
+        provider: str,
+        model: str,
+        status: str,
+        duration: float,
+        error: str = "",
+    ) -> None:
+        self._event_bus.publish(
+            "LLM_DEBUG",
+            {
+                "session_id": session_id,
+                "provider": provider,
+                "model": model or "default",
+                "status": status,
+                "duration": duration,
+                "error": error,
+            },
+        )
+
+
+def _missing_required_llm_config(provider_name: str, config: dict[str, Any]) -> bool:
+    if provider_name not in _REMOTE_LLM_PROVIDERS_REQUIRING_API_KEY:
+        return False
+    return not str(config.get("api_key", "")).strip()
+
+
+def _llm_chain_for(profile: Profile) -> list[dict[str, Any]]:
+    if profile.llm_chain:
+        return [dict(item) for item in profile.llm_chain]
+
+    chain: list[dict[str, Any]] = []
+    if profile.llm_provider:
+        config = dict(profile.llm_config or {})
+        config["provider"] = profile.llm_provider
+        config.setdefault("enabled", True)
+        chain.append(config)
+    if profile.llm_fallback_provider:
+        config = dict(profile.llm_fallback_config or {})
+        config["provider"] = profile.llm_fallback_provider
+        config.setdefault("enabled", True)
+        chain.append(config)
+    return chain
+
+
+def _append_trailing_silence(audio: np.ndarray, sample_rate: int, seconds: float) -> np.ndarray:
+    sample_count = int(sample_rate * seconds)
+    if sample_count <= 0:
+        return audio
+    silence = np.zeros(sample_count, dtype=np.float32)
+    return np.concatenate([audio.astype(np.float32, copy=False), silence])

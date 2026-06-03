@@ -4,7 +4,7 @@ import tomllib
 import os
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import tomli_w
 from pydantic import BaseModel, ConfigDict, Field
@@ -84,8 +84,15 @@ class OverlaySettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = True
+    style: Literal["red-circle", "waveform"] = "red-circle"
     position: str = "bottom-center"
     show_language: bool = True
+
+
+class DebugOverlaySettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
 
 
 class LanguageSettings(BaseModel):
@@ -108,6 +115,7 @@ class Config(BaseModel):
     stt: STTSettings
     injection: InjectionSettings
     overlay: OverlaySettings
+    debug_overlay: DebugOverlaySettings
     language: LanguageSettings
     profiles: dict[str, Profile]
     _config_path: Path | None = None
@@ -136,6 +144,7 @@ def _write_toml_atomic(path: Path, data: dict) -> None:
 
 
 def _build_profile(name: str, raw_profile: dict[str, Any]) -> Profile:
+    llm_chain = _build_llm_chain(raw_profile)
     return Profile(
         name=name,
         stt_provider=raw_profile.get("stt_provider", "faster-whisper"),
@@ -144,10 +153,37 @@ def _build_profile(name: str, raw_profile: dict[str, Any]) -> Profile:
         llm_config=dict(raw_profile["llm_config"]) if isinstance(raw_profile.get("llm_config"), dict) else None,
         llm_fallback_provider=raw_profile.get("llm_fallback_provider") or None,
         llm_fallback_config=dict(raw_profile["llm_fallback_config"]) if isinstance(raw_profile.get("llm_fallback_config"), dict) else None,
+        llm_chain=llm_chain,
         polish_enabled=bool(raw_profile.get("polish_enabled", False)),
         inject_raw_first=bool(raw_profile.get("inject_raw_first", False)),
         style=str(raw_profile.get("style", "default")),
     )
+
+
+def _build_llm_chain(raw_profile: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_chain = raw_profile.get("llm_chain")
+    if isinstance(raw_chain, list):
+        return [dict(item) for item in raw_chain if isinstance(item, dict)]
+
+    chain: list[dict[str, Any]] = []
+    provider = raw_profile.get("llm_provider") or ""
+    if provider:
+        config = dict(raw_profile["llm_config"]) if isinstance(raw_profile.get("llm_config"), dict) else {}
+        config["provider"] = provider
+        config.setdefault("enabled", True)
+        chain.append(config)
+
+    fallback_provider = raw_profile.get("llm_fallback_provider") or ""
+    if fallback_provider:
+        config = (
+            dict(raw_profile["llm_fallback_config"])
+            if isinstance(raw_profile.get("llm_fallback_config"), dict)
+            else {}
+        )
+        config["provider"] = fallback_provider
+        config.setdefault("enabled", True)
+        chain.append(config)
+    return chain
 
 
 def _inject_default_profile(config_data: dict[str, Any]) -> None:
@@ -159,6 +195,7 @@ def _inject_default_profile(config_data: dict[str, Any]) -> None:
     profiles["default"] = {
         "stt_provider": stt.get("provider", "faster-whisper"),
         "llm_provider": "",
+        "llm_chain": [],
         "polish_enabled": False,
             "inject_raw_first": False,
         "style": "default",
@@ -179,6 +216,7 @@ def _ensure_builtin_profiles(config_data: dict[str, Any]) -> None:
         {
             "stt_provider": "faster-whisper",
             "llm_provider": "",
+            "llm_chain": [],
             "polish_enabled": False,
             "style": "default",
             "stt_config": {
@@ -197,6 +235,7 @@ def _ensure_builtin_profiles(config_data: dict[str, Any]) -> None:
             "stt_provider": "faster-whisper",
             "llm_provider": "",
             "llm_fallback_provider": "",
+            "llm_chain": [],
             "polish_enabled": False,
             "style": "default",
             "stt_config": {
@@ -229,6 +268,7 @@ def load_config() -> Config:
     config_data["app"].setdefault("hardware_profile_initialized", False)
     config_data.setdefault("injection", {})
     config_data.setdefault("overlay", {})
+    config_data.setdefault("debug_overlay", {})
     config_data.setdefault("language", {})
     _inject_default_profile(config_data)
     _ensure_builtin_profiles(config_data)
@@ -257,6 +297,7 @@ def config_to_toml_dict(config: Config) -> dict[str, Any]:
             "polish_enabled": profile.polish_enabled,
             "style": profile.style,
             "stt_config": dict(profile.stt_config),
+            "llm_chain": [dict(item) for item in profile.llm_chain],
         }
         if profile.llm_config is not None:
             profile_data["llm_config"] = dict(profile.llm_config)

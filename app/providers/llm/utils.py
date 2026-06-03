@@ -12,6 +12,9 @@ _LEAKED_PREFIXES = (
     "correccion:",
     "correccion final:",
     "salida:",
+    "texto final:",
+    "respuesta final:",
+    "final:",
 )
 
 _COMMENTARY_STARTERS = (
@@ -25,6 +28,11 @@ _COMMENTARY_STARTERS = (
     "nota:",
     "comentario:",
     "explicacion:",
+    "razonamiento:",
+    "analisis:",
+    "pensamiento:",
+    "reasoning:",
+    "analysis:",
 )
 
 
@@ -32,8 +40,8 @@ def build_polish_input(text: str, language: str) -> str:
     language_name = {"es": "espanol", "en": "english"}.get(language.lower(), language)
     return (
         f"Corrige este dictado en {language_name}. "
-        "Devuelve solo el texto final, sin etiquetas, prologo, notas ni explicaciones.\n\n"
-        f"{text.strip()}"
+        "Devuelve solo el texto final, sin etiquetas, prologo, notas, razonamiento ni explicaciones. "
+        f"<dictado>{text.strip()}</dictado>"
     )
 
 
@@ -42,13 +50,30 @@ def sanitize_polish_output(text: str, fallback: str, language: str | None = None
     if not cleaned:
         return _stabilize_output(fallback, language)
 
+    cleaned = _strip_thinking_blocks(cleaned)
+    extracted = _extract_final_section(cleaned)
+    if extracted:
+        cleaned = extracted
+    else:
+        cleaned = _strip_final_tag_fragments(cleaned)
+
     lines = cleaned.splitlines()
     while lines and _looks_like_metadata(lines[0]):
         lines.pop(0)
 
     cleaned = "\n".join(lines).strip()
     cleaned = _strip_trailing_commentary(cleaned)
+    if _looks_like_reasoning_only(cleaned):
+        return _stabilize_output(fallback, language)
     return _stabilize_output(cleaned or fallback, language)
+
+
+def polish_output_is_usable(raw_output: str, sanitized_output: str, fallback: str) -> bool:
+    if not raw_output.strip():
+        return False
+    if _looks_like_reasoning_only(_strip_thinking_blocks(raw_output)):
+        return False
+    return sanitized_output.strip() != fallback.strip()
 
 
 def _stabilize_output(text: str, language: str | None) -> str:
@@ -83,6 +108,77 @@ def _looks_like_commentary(paragraph: str) -> bool:
     if not normalized:
         return True
     return any(normalized.startswith(starter) for starter in _COMMENTARY_STARTERS)
+
+
+def _strip_thinking_blocks(text: str) -> str:
+    without_blocks = re.sub(r"<think\b[^>]*>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL)
+    without_blocks = re.sub(r"<thinking\b[^>]*>.*?</thinking>", "", without_blocks, flags=re.IGNORECASE | re.DOTALL)
+    return without_blocks.strip()
+
+
+def _extract_final_section(text: str) -> str | None:
+    tag_match = re.search(r"<final\b[^>]*>(.*?)</final>", text, flags=re.IGNORECASE | re.DOTALL)
+    if tag_match:
+        return tag_match.group(1).strip()
+
+    open_tag_match = re.search(r"<final\b[^>]*>\s*(.*)$", text, flags=re.IGNORECASE | re.DOTALL)
+    if open_tag_match:
+        return open_tag_match.group(1).strip()
+
+    marker_match = re.search(
+        r"(?:texto final|respuesta final|correccion final|salida final|final)\s*:?\s*(.*)$",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if marker_match:
+        return marker_match.group(1).strip()
+    return None
+
+
+def _strip_final_tag_fragments(text: str) -> str:
+    cleaned = re.sub(r"</?final\b[^>]*>", "", text, flags=re.IGNORECASE)
+    cleaned = re.sub(r"(?im)^\s*final\s*:?\s*", "", cleaned)
+    return cleaned.strip()
+
+
+def _looks_like_reasoning_only(text: str) -> bool:
+    normalized = _normalize(text)
+    if not normalized:
+        return True
+    if _looks_like_numbered_reasoning(text):
+        return True
+    starters = (
+        "el usuario quiere",
+        "el texto esta bien transcrito",
+        "el texto tiene",
+        "debo ",
+        "tengo que ",
+        "voy a ",
+        "voy a corregir",
+        "mirandolo bien",
+        "la tarea es",
+        "the user wants",
+        "i need to",
+        "we need to",
+    )
+    return any(normalized.startswith(starter) for starter in starters)
+
+
+def _looks_like_numbered_reasoning(text: str) -> bool:
+    normalized = _normalize(text)
+    numbered_lines = re.findall(r"(?m)^\s*\d+[.)]\s+", text)
+    if len(numbered_lines) < 2:
+        return False
+    reasoning_terms = (
+        "voy a corregir",
+        "aqui falta",
+        "podria ser",
+        "parece",
+        "lo mas natural",
+        "mirandolo bien",
+        "en el contexto",
+    )
+    return any(term in normalized for term in reasoning_terms)
 
 
 def _normalize(text: str) -> str:

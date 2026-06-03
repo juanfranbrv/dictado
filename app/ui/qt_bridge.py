@@ -8,3 +8,6 @@ class QtEventBridge(QObject):
     transcript_ready = pyqtSignal()
     pause_changed = pyqtSignal(bool)
     language_changed = pyqtSignal(str)
+    audio_level_changed = pyqtSignal(float)
+    llm_status_changed = pyqtSignal(str)
+    llm_debug_event = pyqtSignal(object)

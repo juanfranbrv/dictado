@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from PyQt6.QtWidgets import QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QLabel, QLineEdit, QSpinBox, QWidget
+from PyQt6.QtWidgets import QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QSpinBox, QWidget
 
 from app.models import Profile
+
+
+LLM_CHAIN_ROWS = 4
 
 
 class ProfileEditor(QWidget):
@@ -47,37 +50,11 @@ class ProfileEditor(QWidget):
         self._profile_polish.toggled.connect(self._update_polish_fields)
         self._profile_polish.setToolTip("Si lo activas, tras la transcripcion se intenta limpiar puntuacion y errores obvios.")
 
-        self._llm_provider = QComboBox()
-        self._llm_provider.setEditable(True)
-        self._llm_provider.addItems(["", "groq", "gemini", "ollama"])
-        self._llm_provider.setToolTip("Proveedor del modelo que pule el texto despues de Whisper.")
-        self._llm_model = QLineEdit()
-        self._llm_model.setToolTip("Nombre exacto del modelo dentro del proveedor elegido.")
-        self._llm_api_key = QLineEdit()
-        self._llm_api_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self._llm_api_key.setToolTip("Clave API del proveedor. Se guarda en tu config local.")
-        self._llm_timeout = QDoubleSpinBox()
-        self._llm_timeout.setRange(1.0, 60.0)
-        self._llm_timeout.setSingleStep(0.5)
-        self._llm_timeout.setToolTip(
-            "Tiempo maximo de espera para el pulido. Si el modelo tarda mas, se cancela y se usa el texto crudo."
-        )
-
-        self._fallback_provider = QComboBox()
-        self._fallback_provider.setEditable(True)
-        self._fallback_provider.addItems(["", "gemini", "groq", "ollama"])
-        self._fallback_provider.setToolTip("Proveedor de reserva si falla el LLM principal.")
-        self._fallback_model = QLineEdit()
-        self._fallback_model.setToolTip("Modelo de reserva.")
-        self._fallback_api_key = QLineEdit()
-        self._fallback_api_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self._fallback_api_key.setToolTip("Clave API para el proveedor de fallback.")
-        self._fallback_timeout = QDoubleSpinBox()
-        self._fallback_timeout.setRange(1.0, 60.0)
-        self._fallback_timeout.setSingleStep(0.5)
-        self._fallback_timeout.setToolTip("Tiempo maximo de espera para el modelo de reserva.")
-        self._fallback_enabled = QCheckBox("Fallback activo")
-        self._fallback_enabled.setToolTip("Si esta activo, se podra usar un segundo modelo cuando falle el principal.")
+        self._llm_providers: list[QComboBox] = []
+        self._llm_models: list[QComboBox] = []
+        self._llm_api_keys: list[QLineEdit] = []
+        self._llm_timeouts: list[QDoubleSpinBox] = []
+        self._llm_enabled: list[QCheckBox] = []
 
         self._stt_help = QLabel(
             "Whisper convierte tu voz en texto. Aqui ajustas velocidad, calidad y uso de GPU/CPU."
@@ -101,22 +78,14 @@ class ProfileEditor(QWidget):
         layout.addRow("Estilo", self._style)
         layout.addRow("", self._profile_polish)
         layout.addRow("", self._llm_help)
-        layout.addRow("LLM principal", self._llm_provider)
-        layout.addRow("Modelo LLM", self._llm_model)
-        layout.addRow("API key", self._llm_api_key)
-        layout.addRow("Timeout LLM", self._llm_timeout)
-        layout.addRow("LLM fallback", self._fallback_provider)
-        layout.addRow("Modelo fallback", self._fallback_model)
-        layout.addRow("API key fallback", self._fallback_api_key)
-        layout.addRow("Timeout fallback", self._fallback_timeout)
-        layout.addRow("", self._fallback_enabled)
+        for index in range(LLM_CHAIN_ROWS):
+            layout.addRow(f"LLM {index + 1}", self._build_llm_row())
         self.setLayout(layout)
 
     def set_profile(self, profile: Profile) -> None:
         self._profile = profile
         stt_config = profile.stt_config
-        llm_config = profile.llm_config or {}
-        fallback_config = profile.llm_fallback_config or {}
+        llm_chain = _profile_llm_chain(profile)
 
         _set_combo_text(self._stt_provider, profile.stt_provider)
         _set_combo_text(self._stt_model, str(stt_config.get("model", "large-v3-turbo")))
@@ -128,16 +97,15 @@ class ProfileEditor(QWidget):
 
         self._style.setCurrentText(profile.style)
         self._profile_polish.setChecked(profile.polish_enabled)
-        _set_combo_text(self._llm_provider, profile.llm_provider or "")
-        self._llm_model.setText(str(llm_config.get("model", "")))
-        self._llm_api_key.setText(str(llm_config.get("api_key", "")))
-        self._llm_timeout.setValue(float(llm_config.get("timeout", 6.0)))
-
-        _set_combo_text(self._fallback_provider, profile.llm_fallback_provider or "")
-        self._fallback_model.setText(str(fallback_config.get("model", "")))
-        self._fallback_api_key.setText(str(fallback_config.get("api_key", "")))
-        self._fallback_timeout.setValue(float(fallback_config.get("timeout", 10.0)))
-        self._fallback_enabled.setChecked(bool(fallback_config.get("enabled", bool(profile.llm_fallback_provider))))
+        for index in range(LLM_CHAIN_ROWS):
+            item = llm_chain[index] if index < len(llm_chain) else {}
+            provider = str(item.get("provider", ""))
+            _set_combo_text(self._llm_providers[index], provider)
+            _set_model_options(self._llm_models[index], provider)
+            _set_combo_text(self._llm_models[index], str(item.get("model", "")))
+            self._llm_api_keys[index].setText(str(item.get("api_key", "")))
+            self._llm_timeouts[index].setValue(float(item.get("timeout", 10.0)))
+            self._llm_enabled[index].setChecked(bool(item.get("enabled", bool(provider))))
         self._update_polish_fields(profile.polish_enabled)
 
     def profile(self) -> Profile | None:
@@ -152,41 +120,84 @@ class ProfileEditor(QWidget):
             "warmup_on_startup": self._stt_warmup.isChecked(),
             "beam_size": self._stt_beam_size.value(),
         }
-        llm_provider = self._llm_provider.currentText().strip() or None
-        fallback_provider = self._fallback_provider.currentText().strip() or None
-        llm_config = _llm_config(self._llm_model.text(), self._llm_api_key.text(), self._llm_timeout.value())
-        fallback_config = _llm_config(
-            self._fallback_model.text(),
-            self._fallback_api_key.text(),
-            self._fallback_timeout.value(),
-            enabled=self._fallback_enabled.isChecked(),
-        )
+        llm_chain = self._llm_chain()
 
         return replace(
             self._profile,
             stt_provider=self._stt_provider.currentText().strip() or "faster-whisper",
-            llm_provider=llm_provider,
-            llm_fallback_provider=fallback_provider,
+            llm_provider=None,
+            llm_fallback_provider=None,
             style=self._style.currentText(),
             polish_enabled=self._profile_polish.isChecked(),
             inject_raw_first=False,
             stt_config=stt_config,
-            llm_config=llm_config if llm_provider else None,
-            llm_fallback_config=fallback_config if fallback_provider else None,
+            llm_config=None,
+            llm_fallback_config=None,
+            llm_chain=llm_chain,
         )
 
-    def _update_polish_fields(self, enabled: bool) -> None:
-        for widget in (
-            self._llm_provider,
-            self._llm_model,
-            self._llm_api_key,
-            self._llm_timeout,
-            self._fallback_provider,
-            self._fallback_model,
-            self._fallback_api_key,
-            self._fallback_timeout,
-            self._fallback_enabled,
+    def _build_llm_row(self) -> QWidget:
+        provider = QComboBox()
+        provider.setEditable(True)
+        provider.addItems(["", "fireworks", "google", "groq"])
+
+        model = QComboBox()
+        model.setEditable(True)
+
+        api_key = QLineEdit()
+        api_key.setEchoMode(QLineEdit.EchoMode.Password)
+        api_key.setPlaceholderText("API key")
+
+        timeout = QDoubleSpinBox()
+        timeout.setRange(1.0, 60.0)
+        timeout.setSingleStep(0.5)
+        timeout.setValue(10.0)
+
+        enabled = QCheckBox("Activo")
+
+        provider.currentTextChanged.connect(lambda text, combo=model: _set_model_options(combo, text))
+        _set_model_options(model, "")
+
+        self._llm_providers.append(provider)
+        self._llm_models.append(model)
+        self._llm_api_keys.append(api_key)
+        self._llm_timeouts.append(timeout)
+        self._llm_enabled.append(enabled)
+
+        layout = QHBoxLayout()
+        layout.addWidget(provider, 1)
+        layout.addWidget(model, 2)
+        layout.addWidget(api_key, 2)
+        layout.addWidget(timeout)
+        layout.addWidget(enabled)
+        row = QWidget()
+        row.setLayout(layout)
+        return row
+
+    def _llm_chain(self) -> list[dict]:
+        chain = []
+        for provider, model, api_key, timeout, enabled in zip(
+            self._llm_providers,
+            self._llm_models,
+            self._llm_api_keys,
+            self._llm_timeouts,
+            self._llm_enabled,
         ):
+            provider_name = provider.currentText().strip()
+            if not provider_name:
+                continue
+            item = {
+                "provider": provider_name,
+                "model": model.currentText().strip(),
+                "api_key": api_key.text().strip(),
+                "timeout": float(timeout.value()),
+                "enabled": enabled.isChecked(),
+            }
+            chain.append(item)
+        return chain
+
+    def _update_polish_fields(self, enabled: bool) -> None:
+        for widget in [*self._llm_providers, *self._llm_models, *self._llm_api_keys, *self._llm_timeouts, *self._llm_enabled]:
             widget.setEnabled(enabled)
 
 
@@ -205,3 +216,33 @@ def _llm_config(model: str, api_key: str, timeout: float, enabled: bool | None =
     if enabled is not None:
         config["enabled"] = enabled
     return config
+
+
+def _profile_llm_chain(profile: Profile) -> list[dict]:
+    if profile.llm_chain:
+        return [dict(item) for item in profile.llm_chain]
+    chain = []
+    if profile.llm_provider:
+        item = dict(profile.llm_config or {})
+        item["provider"] = profile.llm_provider
+        item.setdefault("enabled", True)
+        chain.append(item)
+    if profile.llm_fallback_provider:
+        item = dict(profile.llm_fallback_config or {})
+        item["provider"] = profile.llm_fallback_provider
+        item.setdefault("enabled", True)
+        chain.append(item)
+    return chain
+
+
+def _set_model_options(combo: QComboBox, provider: str) -> None:
+    current = combo.currentText()
+    combo.clear()
+    options = {
+        "fireworks": ["accounts/fireworks/models/minimax-m2p7", "accounts/fireworks/models/gpt-oss-120b"],
+        "google": ["gemini-flash-lite-latest", "gemini-flash-latest"],
+        "groq": ["qwen/qwen3-32b"],
+    }
+    combo.addItems(options.get(provider.strip(), []))
+    if current:
+        _set_combo_text(combo, current)

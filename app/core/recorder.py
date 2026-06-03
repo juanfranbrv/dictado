@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from threading import Lock
-from time import perf_counter
+from time import perf_counter, sleep
 from typing import Any
 
 import numpy as np
@@ -16,6 +16,8 @@ from app.utils.audio_devices import input_device_candidates
 class AudioRecorder:
     """Capture microphone audio and publish start/stop events."""
 
+    _STOP_POSTROLL_SECONDS = 0.35
+
     def __init__(self, event_bus: EventBus, settings: AudioSettings) -> None:
         self._event_bus = event_bus
         self._settings = settings
@@ -24,6 +26,7 @@ class AudioRecorder:
         self._stream: sd.InputStream | None = None
         self._is_recording = False
         self._started_at = 0.0
+        self._last_level_at = 0.0
 
     def attach(self) -> None:
         self._event_bus.subscribe("START_RECORDING", self._handle_start)
@@ -86,6 +89,7 @@ class AudioRecorder:
 
         self._is_recording = True
         self._started_at = perf_counter()
+        self._last_level_at = 0.0
         self._event_bus.publish(
             "RECORDING_STARTED",
             {
@@ -98,6 +102,7 @@ class AudioRecorder:
     def _stop_locked(self) -> None:
         logger.info("Stopping audio recording")
         assert self._stream is not None
+        sleep(self._STOP_POSTROLL_SECONDS)
         self._stream.stop()
         self._stream.close()
         self._stream = None
@@ -126,3 +131,11 @@ class AudioRecorder:
             logger.warning("Audio callback status: {}", status)
         del frames, time_info
         self._frames.append(indata.copy())
+        if self._is_recording:
+            now = perf_counter()
+            if self._last_level_at and now - self._last_level_at < 1 / 30:
+                return
+            self._last_level_at = now
+            samples = np.asarray(indata, dtype=np.float32)
+            level = float(np.sqrt(np.mean(np.square(samples))))
+            self._event_bus.publish("AUDIO_LEVEL", {"level": max(0.0, min(level, 1.0))})

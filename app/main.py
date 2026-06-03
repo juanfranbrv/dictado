@@ -20,6 +20,7 @@ from app.core.recorder import AudioRecorder
 from app.events import EventBus
 from app.models import Transcript
 from app.ui.config_window import ConfigWindow
+from app.ui.debug_overlay import DebugOverlay
 from app.ui.overlay import RecordingOverlay
 from app.ui.qt_bridge import QtEventBridge
 from app.ui.tray import TrayController
@@ -89,6 +90,7 @@ class ApplicationController:
         self._force_es_hotkey = TriggerHotkey(self._event_bus, self._config.hotkey.force_language_es, "FORCE_LANGUAGE_ES")
         self._force_en_hotkey = TriggerHotkey(self._event_bus, self._config.hotkey.force_language_en, "FORCE_LANGUAGE_EN")
         self._overlay = RecordingOverlay(self._config.overlay)
+        self._debug_overlay = DebugOverlay(self._config.debug_overlay)
         self._config_window = ConfigWindow(self._config)
         self._tray = TrayController(ROOT_DIR / "assets" / "mic-vocal.png")
         self._timings = TimingCollector()
@@ -131,6 +133,7 @@ class ApplicationController:
         self._ensure_active_profile_model_ready()
         self._tray.show()
         self._tray.set_profiles(self._pipeline.list_profiles(), self._pipeline.active_profile)
+        self._tray.set_llm_status(self._pipeline.llm_status)
         self._hotkey.start()
         self._force_es_hotkey.start()
         self._force_en_hotkey.start()
@@ -141,6 +144,7 @@ class ApplicationController:
     def shutdown(self) -> None:
         self._tray.hide()
         self._overlay.hide_overlay()
+        self._debug_overlay.hide()
         self._hotkey.stop()
         self._force_es_hotkey.stop()
         self._force_en_hotkey.stop()
@@ -166,11 +170,17 @@ class ApplicationController:
         self._event_bus.subscribe("TRANSCRIPT_READY", print_transcript)
         self._event_bus.subscribe("TRANSCRIPT_READY", lambda payload: self._bridge.transcript_ready.emit())
         self._event_bus.subscribe("LANGUAGE_CHANGED", lambda payload: self._bridge.language_changed.emit(payload["language"]))
+        self._event_bus.subscribe("AUDIO_LEVEL", lambda payload: self._bridge.audio_level_changed.emit(float(payload["level"])))
+        self._event_bus.subscribe("LLM_STATUS_CHANGED", lambda payload: self._bridge.llm_status_changed.emit(payload["status"]))
+        self._event_bus.subscribe("LLM_DEBUG", lambda payload: self._bridge.llm_debug_event.emit(payload))
         self._event_bus.subscribe("PROFILE_CHANGED", lambda payload: self._tray.set_active_profile(payload["profile"]))
         self._event_bus.subscribe("TIMING", self._handle_timing_event)
         self._bridge.recording_started.connect(self._overlay.show_recording)
         self._bridge.transcript_ready.connect(self._overlay.hide_overlay)
         self._bridge.language_changed.connect(self._overlay.set_language)
+        self._bridge.audio_level_changed.connect(self._overlay.set_audio_level)
+        self._bridge.llm_status_changed.connect(self._tray.set_llm_status)
+        self._bridge.llm_debug_event.connect(self._debug_overlay.append_event)
 
         self._tray.pause_toggled.connect(self._set_paused)
         self._tray.profile_selected.connect(self._select_profile)
@@ -211,6 +221,7 @@ class ApplicationController:
         self._pipeline.reconfigure(config.profiles, config.app.active_profile)
         self._injector.update_settings(config.injection)
         self._overlay.update_settings(config.overlay)
+        self._debug_overlay.update_settings(config.debug_overlay)
         self._tray.set_profiles(self._pipeline.list_profiles(), self._pipeline.active_profile)
 
     def _reload_config_from_disk(self) -> None:

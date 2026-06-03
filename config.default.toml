@@ -39,8 +39,12 @@ fallback_to_clipboard = true
 
 [overlay]
 enabled = true
+style = "red-circle"
 position = "bottom-center"
 show_language = true
+
+[debug_overlay]
+enabled = false
 
 [language]
 preferred = ["es", "en"]
@@ -50,8 +54,8 @@ switch_penalty = 0.15
 
 [profiles.default]
 stt_provider = "faster-whisper"
-llm_provider = "groq"
-llm_fallback_provider = "gemini"
+llm_provider = ""
+llm_fallback_provider = ""
 polish_enabled = true
 style = "default"
 
@@ -63,14 +67,31 @@ local_files_only = true
 warmup_on_startup = true
 beam_size = 5
 
-[profiles.default.llm_config]
+[[profiles.default.llm_chain]]
+provider = "google"
 api_key = ""
-model = "llama-3.1-8b-instant"
-timeout = 6.0
+model = "gemini-flash-lite-latest"
+enabled = true
+timeout = 10.0
 
-[profiles.default.llm_fallback_config]
+[[profiles.default.llm_chain]]
+provider = "google"
 api_key = ""
-model = "gemini-3.1-flash-lite-preview"
+model = "gemini-flash-latest"
+enabled = true
+timeout = 10.0
+
+[[profiles.default.llm_chain]]
+provider = "groq"
+api_key = ""
+model = "qwen/qwen3-32b"
+enabled = true
+timeout = 10.0
+
+[[profiles.default.llm_chain]]
+provider = "fireworks"
+api_key = ""
+model = "accounts/fireworks/models/minimax-m2p7"
 enabled = true
 timeout = 10.0
 

@@ -29,6 +29,7 @@ class Profile:
     llm_config: dict[str, Any] | None = None
     llm_fallback_provider: str | None = None
     llm_fallback_config: dict[str, Any] | None = None
+    llm_chain: list[dict[str, Any]] = field(default_factory=list)
     polish_enabled: bool = False
     inject_raw_first: bool = True
     style: str = "default"

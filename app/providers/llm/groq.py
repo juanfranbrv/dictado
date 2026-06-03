@@ -5,7 +5,7 @@ from loguru import logger
 
 from app.learning.prompts import SYSTEM_PROMPTS
 from app.providers.llm.registry import register_llm
-from app.providers.llm.utils import build_polish_input, sanitize_polish_output
+from app.providers.llm.utils import build_polish_input, polish_output_is_usable, sanitize_polish_output
 
 
 @register_llm("groq")
@@ -49,7 +49,10 @@ class GroqLLM:
             payload = response.json()
 
         polished = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
-        return sanitize_polish_output(polished, text, language)
+        sanitized = sanitize_polish_output(polished, text, language)
+        if not polish_output_is_usable(polished, sanitized, text):
+            raise ValueError("LLM returned reasoning or unusable polish output")
+        return sanitized
 
     def warmup(self) -> None:
         logger.info("Groq warmup for {}", self._model)

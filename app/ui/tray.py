@@ -16,12 +16,20 @@ class TrayController(QObject):
 
     def __init__(self, icon_path: Path) -> None:
         super().__init__()
-        self._tray = QSystemTrayIcon(self._load_icon(icon_path))
+        self._normal_icon = self._load_icon(icon_path)
+        self._generated_llm_icon = qta.icon("fa5s.exclamation-triangle", color="#d08a00")
+        self._unavailable_llm_icon = qta.icon("fa5s.exclamation-circle", color="#c8322a")
+        self._tray = QSystemTrayIcon(self._normal_icon)
         self._menu = QMenu()
+        self._paused = False
+        self._llm_status = "not-configured"
 
         self._pause_action = QAction("Pausa", self._menu)
         self._pause_action.setCheckable(True)
         self._pause_action.toggled.connect(self.pause_toggled.emit)
+
+        self._llm_status_action = QAction("LLM: sin configurar", self._menu)
+        self._llm_status_action.setEnabled(False)
 
         self._profiles_menu = QMenu("Perfil", self._menu)
         self._profile_actions: dict[str, QAction] = {}
@@ -33,6 +41,7 @@ class TrayController(QObject):
         self._exit_action.triggered.connect(self.exit_requested.emit)
 
         self._menu.addAction(self._pause_action)
+        self._menu.addAction(self._llm_status_action)
         self._menu.addMenu(self._profiles_menu)
         self._menu.addSeparator()
         self._menu.addAction(self._config_action)
@@ -50,10 +59,15 @@ class TrayController(QObject):
         self._tray.hide()
 
     def set_paused(self, paused: bool) -> None:
+        self._paused = paused
         self._pause_action.blockSignals(True)
         self._pause_action.setChecked(paused)
         self._pause_action.blockSignals(False)
-        self._tray.setToolTip("dictado (pausado)" if paused else "dictado")
+        self._refresh_status_display()
+
+    def set_llm_status(self, status: str) -> None:
+        self._llm_status = status
+        self._refresh_status_display()
 
     def set_profiles(self, profiles: list[str], active_profile: str) -> None:
         self._profiles_menu.clear()
@@ -75,6 +89,25 @@ class TrayController(QObject):
     def _handle_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self.open_config_requested.emit()
+
+    def _refresh_status_display(self) -> None:
+        if self._llm_status == "configured":
+            llm_text = "LLM: configurado"
+            icon = self._normal_icon
+        elif self._llm_status == "unavailable":
+            llm_text = "LLM: no operativo"
+            icon = self._unavailable_llm_icon
+        else:
+            llm_text = "LLM: sin configurar"
+            icon = self._unavailable_llm_icon
+
+        if icon.isNull():
+            icon = self._normal_icon
+
+        paused_text = " (pausado)" if self._paused else ""
+        self._tray.setIcon(icon)
+        self._tray.setToolTip(f"dictado{paused_text} - {llm_text}")
+        self._llm_status_action.setText(llm_text)
 
     def _load_icon(self, icon_path: Path) -> QIcon:
         if icon_path.exists():

@@ -77,6 +77,9 @@ class ConfigWindow(QMainWindow):
         self._active_profile.addItems(sorted(config.profiles))
         self._active_profile.setCurrentText(config.app.active_profile)
         self._overlay_enabled.setChecked(config.overlay.enabled)
+        overlay_style_index = self._overlay_style.findData(config.overlay.style)
+        self._overlay_style.setCurrentIndex(max(overlay_style_index, 0))
+        self._debug_overlay_enabled.setChecked(config.debug_overlay.enabled)
         self._reload_audio_devices(config.audio.device)
         self._injection_method.setCurrentText(config.injection.method)
         self._update_injection_help(self._injection_method.currentText())
@@ -94,6 +97,10 @@ class ConfigWindow(QMainWindow):
     def _build_general_tab(self) -> QWidget:
         self._active_profile = QComboBox()
         self._overlay_enabled = QCheckBox("Mostrar overlay")
+        self._overlay_style = QComboBox()
+        self._overlay_style.addItem("Circulo rojo", "red-circle")
+        self._overlay_style.addItem("Ondas", "waveform")
+        self._debug_overlay_enabled = QCheckBox("Mostrar consola de depuracion")
         self._audio_device = QComboBox()
         self._audio_device_help = QLabel(
             "Microfono: si dejas `Predeterminado del sistema`, la app usara el micro activo de Windows. "
@@ -109,6 +116,8 @@ class ConfigWindow(QMainWindow):
         layout = QFormLayout()
         layout.addRow("Perfil activo", self._active_profile)
         layout.addRow("", self._overlay_enabled)
+        layout.addRow("Estilo de overlay", self._overlay_style)
+        layout.addRow("", self._debug_overlay_enabled)
         layout.addRow("Microfono", self._audio_device)
         layout.addRow("", self._audio_device_help)
         layout.addRow("Metodo de inyeccion", self._injection_method)
@@ -291,7 +300,14 @@ class ConfigWindow(QMainWindow):
                 "force_language_en": self._force_en_hotkey.text().strip(),
             }
         )
-        overlay = self._config.overlay.model_copy(update={"enabled": self._overlay_enabled.isChecked()})
+        overlay_style = self._overlay_style.currentData()
+        overlay = self._config.overlay.model_copy(
+            update={
+                "enabled": self._overlay_enabled.isChecked(),
+                "style": overlay_style if isinstance(overlay_style, str) else "red-circle",
+            }
+        )
+        debug_overlay = self._config.debug_overlay.model_copy(update={"enabled": self._debug_overlay_enabled.isChecked()})
         audio = self._config.audio.model_copy(update={"device": self._selected_audio_device()})
         injection = self._config.injection.model_copy(update={"method": self._injection_method.currentText()})
         updated = self._config.model_copy(
@@ -300,6 +316,7 @@ class ConfigWindow(QMainWindow):
                 "hotkey": hotkey,
                 "audio": audio,
                 "overlay": overlay,
+                "debug_overlay": debug_overlay,
                 "injection": injection,
                 "profiles": profiles,
             }
